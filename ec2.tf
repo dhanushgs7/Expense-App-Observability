@@ -1,15 +1,12 @@
-# EC2 instances with user_data bootstrap -- terraform apply both
-# creates the infra and deploys the apps. Each tier's script lives in
-# userdata/ (mysql.sh, backend.sh, frontend.sh), styled after
-# daws-90s/shell-roboshop: self-contained, no shared common.sh,
+# EC2 instances with user_data bootstrap -- terraform apply creates the
+# infra and deploys the apps. Each tier's script lives in userdata/
+# (mysql.sh, backend.sh, frontend.sh, prometheus.sh): self-contained,
 # VALIDATE-wrapped steps logging to /var/log/expense on the instance.
 #
-# Ordering: backend's user_data needs mysql's app user to exist and
-# frontend's nginx.conf needs to resolve backend.<domain> at reload
-# time, so backend depends_on the mysql Route53 record (not just the
-# mysql instance) and frontend depends_on the backend Route53 record --
-# mirrors how roboshop-v2.sh updates R53 right after each instance
-# launches, before moving on to the next tier.
+# Ordering: tiers talk to each other over private IPs passed in by
+# Terraform (backend -> mysql private IP, frontend -> backend private IP),
+# so nothing depends on public DNS at boot. The attribute references
+# below make Terraform create mysql, then backend, then frontend.
 
 /* data "aws_ami" "rhel9" {
   most_recent = true
@@ -61,16 +58,14 @@ resource "aws_instance" "backend" {
   vpc_security_group_ids = [aws_security_group.backend.id]
   #key_name               = var.key_name
 
+  # Private IP of mysql: no DNS lookup needed at boot, and the reference
+  # makes Terraform create the mysql instance first.
   user_data = templatefile("${path.module}/userdata/backend.sh", {
-    db_host               = "mysql.${var.domain_name}"
+    db_host               = aws_instance.mysql.private_ip
     db_app_password       = var.db_app_password
     artifact_url          = "${var.artifacts_base_url}/expense-backend-v1.tar.gz"
     node_exporter_version = var.node_exporter_version
   })
-
-  # mysql's Route53 record (not just the mysql instance) must exist first --
-  # this script connects to mysql.<domain> to create the expense_app user.
-  depends_on = [aws_route53_record.mysql]
 
   root_block_device {
     volume_size = var.root_volume_size
@@ -91,15 +86,13 @@ resource "aws_instance" "frontend" {
   vpc_security_group_ids = [aws_security_group.frontend.id]
   #key_name               = var.key_name
 
+  # Private IP of backend: nginx's proxy_pass uses it directly, so nginx -t
+  # no longer depends on DNS, and Terraform creates the backend first.
   user_data = templatefile("${path.module}/userdata/frontend.sh", {
-    backend_host          = "backend.${var.domain_name}"
+    backend_host          = aws_instance.backend.private_ip
     artifact_url          = "${var.artifacts_base_url}/expense-frontend-v1.tar.gz"
     node_exporter_version = var.node_exporter_version
   })
-
-  # backend's Route53 record must exist first -- nginx.conf's proxy_pass
-  # resolves backend.<domain> at reload time.
-  depends_on = [aws_route53_record.backend]
 
   root_block_device {
     volume_size = var.root_volume_size
