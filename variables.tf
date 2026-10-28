@@ -79,16 +79,14 @@ variable "artifacts_base_url" {
 }
 
 variable "db_root_password" {
-  description = "MySQL root password, set via mysql_secure_installation in userdata/mysql.sh. Lab/demo default -- override for anything longer-lived."
+  description = "MySQL root password, set via mysql_secure_installation in userdata/mysql.sh. Set in terraform.tfvars -- never commit a real value."
   type        = string
-  default     = "ExpenseApp@1"
   sensitive   = true
 }
 
 variable "db_app_password" {
-  description = "Password for the expense_app MySQL user -- shared between userdata/mysql.sh (CREATE USER) and userdata/backend.sh (.env DB_PASSWORD). Lab/demo default -- override for anything longer-lived."
+  description = "Password for the expense_app MySQL user -- shared between userdata/mysql.sh (CREATE USER) and userdata/backend.sh (.env DB_PASSWORD). Set in terraform.tfvars -- never commit a real value."
   type        = string
-  default     = "ChangeMe123!"
   sensitive   = true
 }
 
@@ -117,9 +115,8 @@ variable "mysqld_exporter_version" {
 }
 
 variable "db_exporter_password" {
-  description = "Password for the exporter@localhost MySQL user mysqld_exporter connects as. Lab/demo default -- override for anything longer-lived."
+  description = "Password for the exporter@localhost MySQL user mysqld_exporter connects as. Set in terraform.tfvars -- never commit a real value."
   type        = string
-  default     = "ExporterMon@1"
   sensitive   = true
 }
 

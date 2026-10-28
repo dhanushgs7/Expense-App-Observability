@@ -19,6 +19,7 @@ if [ $USERID -ne 0 ]; then
 fi
 
 VALIDATE(){
+    TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
     if [ $1 -ne 0 ]; then
         echo -e "$TIMESTAMP [ERROR] $2 ... $R FAILURE $N" | tee -a $LOGS_FILE
         exit 1
@@ -35,35 +36,6 @@ dnf module disable nodejs -y &>> $LOGS_FILE
 dnf module enable nodejs:20 -y &>> $LOGS_FILE
 dnf install nodejs nginx -y &>> $LOGS_FILE
 VALIDATE $? "Installing NodeJS:20 and Nginx"
-
-rm -rf /tmp/expense-frontend /tmp/frontend.tar.gz
-mkdir -p /tmp/expense-frontend
-curl -o /tmp/frontend.tar.gz $ARTIFACT_URL &>> $LOGS_FILE
-cd /tmp/expense-frontend
-tar -xzf /tmp/frontend.tar.gz
-VALIDATE $? "Downloaded and extracted frontend artifact"
-
-npm install &>> $LOGS_FILE
-VALIDATE $? "Installing dependencies"
-
-npm run build &>> $LOGS_FILE
-VALIDATE $? "Building frontend (VITE_API_URL left unset -- relative /api/... calls go through nginx)"
-
-rm -rf /usr/share/nginx/html/*
-VALIDATE $? "Removed default nginx content"
-
-cp -r dist/* /usr/share/nginx/html/
-VALIDATE $? "Deployed frontend build"
-
-sed "s/backend.daws86s.fun/$BACKEND_HOST/" nginx.conf > /etc/nginx/default.d/expense.conf
-VALIDATE $? "Configured nginx reverse proxy"
-
-nginx -t &>> $LOGS_FILE
-VALIDATE $? "Validating nginx config"
-
-systemctl enable nginx &>> $LOGS_FILE
-systemctl restart nginx
-VALIDATE $? "Starting nginx"
 
 # ---- node_exporter ----
 id node_exporter &>> $LOGS_FILE
@@ -101,3 +73,37 @@ UNIT
 systemctl daemon-reload
 systemctl enable --now node_exporter &>> $LOGS_FILE
 VALIDATE $? "Starting node_exporter"
+
+# ---- app ----
+
+rm -rf /tmp/expense-frontend /tmp/frontend.tar.gz
+mkdir -p /tmp/expense-frontend
+curl -o /tmp/frontend.tar.gz $ARTIFACT_URL &>> $LOGS_FILE
+cd /tmp/expense-frontend
+tar -xzf /tmp/frontend.tar.gz
+VALIDATE $? "Downloaded and extracted frontend artifact"
+
+npm install &>> $LOGS_FILE
+VALIDATE $? "Installing dependencies"
+
+npm run build &>> $LOGS_FILE
+VALIDATE $? "Building frontend (VITE_API_URL left unset -- relative /api/... calls go through nginx)"
+
+rm -rf /usr/share/nginx/html/*
+VALIDATE $? "Removed default nginx content"
+
+cp -r dist/* /usr/share/nginx/html/
+VALIDATE $? "Deployed frontend build"
+
+sed "s/backend.daws86s.fun/$BACKEND_HOST/" nginx.conf > /etc/nginx/default.d/expense.conf
+VALIDATE $? "Configured nginx reverse proxy"
+grep -q "$BACKEND_HOST" /etc/nginx/default.d/expense.conf
+VALIDATE $? "Confirmed backend host is set in nginx config"
+
+nginx -t &>> $LOGS_FILE
+VALIDATE $? "Validating nginx config"
+
+systemctl enable nginx &>> $LOGS_FILE
+systemctl restart nginx
+VALIDATE $? "Starting nginx"
+

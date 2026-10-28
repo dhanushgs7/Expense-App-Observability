@@ -19,6 +19,7 @@ if [ $USERID -ne 0 ]; then
 fi
 
 VALIDATE(){
+    TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
     if [ $1 -ne 0 ]; then
         echo -e "$TIMESTAMP [ERROR] $2 ... $R FAILURE $N" | tee -a $LOGS_FILE
         exit 1
@@ -36,6 +37,45 @@ dnf module disable nodejs -y &>> $LOGS_FILE
 dnf module enable nodejs:20 -y &>> $LOGS_FILE
 dnf install nodejs -y &>> $LOGS_FILE
 VALIDATE $? "Installing NodeJS:20"
+
+# ---- node_exporter ----
+id node_exporter &>> $LOGS_FILE
+if [ $? -ne 0 ]; then
+    useradd --system --no-create-home --shell /sbin/nologin node_exporter &>> $LOGS_FILE
+    VALIDATE $? "Creating node_exporter user"
+else
+    echo -e "System user node_exporter already created ... $Y SKIPPING $N"
+fi
+
+cd /opt
+rm -f node_exporter-$NODE_EXPORTER_VERSION.linux-amd64.tar.gz
+curl -sL -o node_exporter-$NODE_EXPORTER_VERSION.linux-amd64.tar.gz "https://github.com/prometheus/node_exporter/releases/download/v$NODE_EXPORTER_VERSION/node_exporter-$NODE_EXPORTER_VERSION.linux-amd64.tar.gz" &>> $LOGS_FILE
+tar -xzf node_exporter-$NODE_EXPORTER_VERSION.linux-amd64.tar.gz &>> $LOGS_FILE
+ln -sfn node_exporter-$NODE_EXPORTER_VERSION.linux-amd64 /opt/node_exporter
+chown -R node_exporter:node_exporter /opt/node_exporter-$NODE_EXPORTER_VERSION.linux-amd64
+VALIDATE $? "Installing node_exporter"
+
+cat > /etc/systemd/system/node_exporter.service <<'UNIT'
+[Unit]
+Description=Node Exporter
+Documentation=https://github.com/prometheus/node_exporter
+After=network-online.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+Restart=on-failure
+ExecStart=/opt/node_exporter/node_exporter
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now node_exporter &>> $LOGS_FILE
+VALIDATE $? "Starting node_exporter"
+
+# ---- app ----
 
 id expense &>> $LOGS_FILE
 if [ $? -ne 0 ]; then
@@ -82,39 +122,3 @@ systemctl enable backend &>> $LOGS_FILE
 systemctl restart backend
 VALIDATE $? "Starting backend service"
 
-# ---- node_exporter ----
-id node_exporter &>> $LOGS_FILE
-if [ $? -ne 0 ]; then
-    useradd --system --no-create-home --shell /sbin/nologin node_exporter &>> $LOGS_FILE
-    VALIDATE $? "Creating node_exporter user"
-else
-    echo -e "System user node_exporter already created ... $Y SKIPPING $N"
-fi
-
-cd /opt
-rm -f node_exporter-$NODE_EXPORTER_VERSION.linux-amd64.tar.gz
-curl -sL -o node_exporter-$NODE_EXPORTER_VERSION.linux-amd64.tar.gz "https://github.com/prometheus/node_exporter/releases/download/v$NODE_EXPORTER_VERSION/node_exporter-$NODE_EXPORTER_VERSION.linux-amd64.tar.gz" &>> $LOGS_FILE
-tar -xzf node_exporter-$NODE_EXPORTER_VERSION.linux-amd64.tar.gz &>> $LOGS_FILE
-ln -sfn node_exporter-$NODE_EXPORTER_VERSION.linux-amd64 /opt/node_exporter
-chown -R node_exporter:node_exporter /opt/node_exporter-$NODE_EXPORTER_VERSION.linux-amd64
-VALIDATE $? "Installing node_exporter"
-
-cat > /etc/systemd/system/node_exporter.service <<'UNIT'
-[Unit]
-Description=Node Exporter
-Documentation=https://github.com/prometheus/node_exporter
-After=network-online.target
-
-[Service]
-User=node_exporter
-Group=node_exporter
-Restart=on-failure
-ExecStart=/opt/node_exporter/node_exporter
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-systemctl daemon-reload
-systemctl enable --now node_exporter &>> $LOGS_FILE
-VALIDATE $? "Starting node_exporter"
