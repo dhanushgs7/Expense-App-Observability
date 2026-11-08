@@ -1,253 +1,406 @@
-# Expense App Observability
+# Expense App Observability on AWS
 
-A cloud-hosted expense-tracking application deployed on AWS and monitored with Prometheus, Grafana, and Alertmanager. This project combines infrastructure provisioning, web serving, application health checks, metrics, dashboards, and alert notifications.
-
-> **Live demo:** [https://dhanush-expense-lab.duckdns.org](https://dhanush-expense-lab.duckdns.org)  
-> This is a learning demo on a free DuckDNS subdomain and may change or become unavailable. Do not use it for sensitive or real financial data.
-
-## Project Highlights
-
-- Deployed a React-based expense application on AWS EC2.
-- Provisioned cloud infrastructure with Terraform.
-- Served the frontend with Nginx on Red Hat Enterprise Linux 9.
-- Routed `/api/` requests from Nginx to a backend service over the private network.
-- Configured a DuckDNS hostname and HTTPS using Let's Encrypt and Certbot.
-- Collected infrastructure and application metrics with Prometheus and exporters.
-- Built Grafana dashboards for application request rate, latency, status codes, and infrastructure health.
-- Configured Alertmanager notifications to Slack and email.
-- Used Blackbox Exporter probes to monitor HTTP/HTTPS endpoint availability.
+A Terraform-based AWS deployment of a three-tier expense application with a separate monitoring instance. The project combines EC2 provisioning, Nginx reverse proxying, Route 53 DNS, Prometheus metrics collection, Grafana dashboards and Alertmanager notification configuration.
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    U[User / Browser] -->|HTTPS :443| DNS[DuckDNS hostname]
-    DNS --> FE[Frontend EC2<br/>Nginx + React app]
-    FE -->|/api/* over private network| BE[Backend EC2<br/>Application API :8080]
-    BE --> DB[(MySQL EC2)]
-    FE -. metrics .-> P[Prometheus]
-    BE -. metrics / node metrics .-> P
-    DB -. exporter / node metrics .-> P
-    P --> G[Grafana dashboards]
-    P --> A[Alertmanager]
-    A --> S[Slack notifications]
-    A --> E[Email notifications]
-    P -. HTTP / HTTPS probes .-> BB[Blackbox Exporter]
+    U[User / Browser] --> DNS[Amazon Route 53]
+    DNS --> FE[Frontend EC2<br/>Nginx + React]
+    FE -->|Private IP / API proxy| BE[Backend EC2<br/>Node.js :8080]
+    BE -->|Private network| DB[(MySQL EC2)]
+
+    subgraph AWS[AWS Default VPC]
+        FE
+        BE
+        DB
+        MON[Monitoring EC2]
+    end
+
+    FE -. Node Exporter .-> MON
+    BE -. Node Exporter + App Metrics .-> MON
+    DB -. Node Exporter + MySQL Exporter .-> MON
+
+    MON --> P[Prometheus]
+    MON --> G[Grafana]
+    MON --> AM[Alertmanager]
+    P --> BB[Blackbox Exporter]
+    AM --> S[Slack]
+    AM --> E[Email]
 ```
 
-This is a high-level diagram. Confirm exporter placement and scrape paths against the current configuration before changing the deployment.
+The infrastructure uses four EC2 instances:
+
+1. Frontend: Nginx and the built React application.
+2. Backend: Node.js application.
+3. Database: MySQL.
+4. Monitoring: Prometheus, Grafana, Alertmanager and Blackbox Exporter.
+
+Terraform uses private IP references for frontend-to-backend and backend-to-database communication. Security groups restrict application-tier communication to the intended upstream components.
 
 ## Technology Stack
 
-| Area | Technologies |
+| Layer | Technologies |
 |---|---|
-| Cloud | AWS EC2, Security Groups, Route 53 resources used during DNS experiments |
+| Cloud | AWS EC2, VPC, Security Groups, Route 53 |
 | Infrastructure as Code | Terraform |
-| Frontend / web server | React, Nginx |
-| Backend | Application API on port `8080` |
+| Frontend | React, Nginx |
+| Backend | Node.js |
 | Database | MySQL |
-| Operating system | Red Hat Enterprise Linux 9.7 on the frontend instance |
-| DNS and TLS | DuckDNS, Let's Encrypt, Certbot |
-| Monitoring | Prometheus, Node Exporter, MySQL Exporter, Blackbox Exporter |
-| Visualization | Grafana |
-| Alerting | Alertmanager, Slack, email |
-| Version control | Git, GitHub |
+| Monitoring | Prometheus |
+| Exporters | Node Exporter, MySQL Exporter, Blackbox Exporter |
+| Dashboards | Grafana |
+| Alerting | Alertmanager, Slack, Email |
+| DNS | Amazon Route 53 |
+| Operating System | Red Hat Enterprise Linux |
+| Version Control | Git, GitHub |
 
-## Application Access
-
-- **HTTPS:** https://dhanush-expense-lab.duckdns.org
-- **HTTP:** http://dhanush-expense-lab.duckdns.org
-- **Direct IP (troubleshooting only):** `http://3.80.209.100`
-
-Use the hostname rather than the IP address for HTTPS because the certificate is issued for the hostname. Avoid entering real personal or financial information into a public demo.
-
-## Monitoring and Observability
-
-### Prometheus
-
-Prometheus scrapes the configured application, host, database-exporter, and probe targets. Use the Targets page to check scrape status and the expression browser to inspect metrics.
-
-Example PromQL queries:
-
-```promql
-up
-```
-
-Shows whether configured scrape targets are reachable by Prometheus.
-
-```promql
-probe_success
-```
-
-Shows the result for configured Blackbox probes (`1` for success and `0` for failure).
-
-```promql
-ALERTS{alertstate="firing"}
-```
-
-Lists currently firing alert series.
-
-A target being `UP` means Prometheus can scrape that target; it does not necessarily mean an HTTP endpoint probe or the application itself is healthy. Check `probe_success` and application-specific metrics too.
-
-### Grafana
-
-Grafana dashboards help review application and infrastructure behavior, including request rate, latency, status codes, and host metrics. Dashboard panels depend on the metrics and labels actually exposed by the application and exporters.
-
-### Alertmanager
-
-Alertmanager routes configured alerts to Slack and email. Verify delivery with a controlled test alert and confirm that the alert resolves when the underlying condition clears. Do not publish webhook URLs, SMTP credentials, tokens, or other notification secrets.
-
-### Blackbox Exporter
-
-Blackbox probes test configured HTTP/HTTPS endpoints, including the public application URL and backend health endpoint. A failed probe may be caused by DNS, network access, TLS configuration, or the endpoint itself; inspect probe results before changing alert rules.
-
-## Repository Layout
-
-The exact layout may evolve. A typical layout could look like this:
+## Repository Structure
 
 ```text
 Expense-App-Observability/
-├── terraform/                 # Terraform configuration, if kept here
-├── userdata/                  # EC2 bootstrap/user-data scripts, if present
-├── prometheus/                # Prometheus configuration, if present
-├── grafana/                   # Dashboard/provisioning files, if present
-├── alertmanager/              # Alert routing configuration, if present
-└── README.md
+├── .gitattributes
+├── .gitignore
+├── .terraform.lock.hcl
+├── README.md
+├── dashboard-01-fleet-overview.json
+├── dashboard-02-node-host-use.json
+├── dashboard-03-mysql.json
+├── dashboard-04-application-red.json
+├── dashboard-05-business-metrics.j
+├── dashboard-06-blackbox-synthe
+├── dashboard-07-slo-error-budget
+├── data.tf
+├── ec2.tf
+├── iam.tf
+├── outputs.tf
+├── prometheus/
+│   ├── alerting-rules.yaml
+│   └── recording_rules.yaml
+├── r53.tf
+├── scripts/
+│   ├── load-fault-traffic.sh
+│   └── load-healthy-traffic.sh
+├── security_groups.tf
+├── userdata-grafana-provisioning
+├── userdata/
+│   ├── backend.sh
+│   ├── frontend.sh
+│   ├── mysql.sh
+│   └── prometheus.sh
+├── variables.tf
+└── versions.tf
 ```
 
-Update this tree to match the actual repository before publishing; remove entries that do not exist.
+**Repository completeness note:** The current GitHub tree contains one populated dashboard JSON file. The other six dashboard files, the Prometheus rule files, the two traffic-generation scripts and `userdata-grafana-provisioning` are currently empty. They are not represented as completed implementations here.
 
-## Deployment Guide
+## Infrastructure Provisioning
 
-These are general workflow steps. Run Terraform commands from the directory containing the project's root Terraform configuration files.
+Terraform provisions four EC2 instances using the AWS provider.
 
-### 1. Prerequisites
+### Infrastructure responsibilities
 
-- An AWS account and credentials configured locally.
-- Terraform and AWS CLI installed.
-- Git installed.
-- SSH access to the EC2 instances.
-- A domain or subdomain you control if reproducing the public DNS and HTTPS setup.
+| File | Responsibility |
+|---|---|
+| `versions.tf` | Terraform and AWS provider versions |
+| `provider.tf` | Not present; provider configuration is in `versions.tf` |
+| `data.tf` | Default VPC, subnets and AMI lookup |
+| `ec2.tf` | Frontend, backend, MySQL and Prometheus instances |
+| `security_groups.tf` | Network access controls |
+| `iam.tf` | Prometheus EC2 discovery permissions |
+| `r53.tf` | Route 53 DNS records |
+| `variables.tf` | Infrastructure and application inputs |
+| `outputs.tf` | Instance addresses and infrastructure outputs |
 
-### 2. Clone the repository
+Terraform uses the default VPC and discovers available subnets. It does not provision a custom VPC in this implementation.
+
+The Prometheus instance has an IAM role that permits EC2 service discovery through `DescribeInstances` and `DescribeAvailabilityZones`.
+
+## Monitoring Design
+
+### Prometheus
+
+Prometheus runs on the dedicated monitoring instance.
+
+The bootstrap script configures:
+- Prometheus self-monitoring.
+- EC2 service discovery.
+- Node Exporter metrics.
+- MySQL Exporter metrics.
+- Backend application metrics.
+- Blackbox HTTP/HTTPS probes.
+
+### Grafana
+
+Grafana runs on the monitoring instance and provides a visualization interface for collected metrics.
+
+The repository currently contains one populated dashboard JSON file. Other dashboard files are empty placeholders.
+
+### Alertmanager
+
+Alertmanager is configured to route notifications based on alert severity.
+
+The Terraform inputs include:
+- Slack webhook URL.
+- Slack channel.
+- SMTP host and credentials.
+- Email sender and recipient.
+
+The actual monitoring artifact bundle is downloaded during Prometheus instance bootstrap.
+
+### Exporters
+
+| Exporter | Purpose |
+|---|---|
+| Node Exporter | Host-level metrics |
+| MySQL Exporter | MySQL metrics |
+| Blackbox Exporter | HTTP/HTTPS endpoint probes |
+
+## External Artifact Dependency
+
+The Terraform variable `artifacts_base_url` defaults to:
+
+`https://raw.githubusercontent.com/daws-90s/expense-prometheus-grafana-docs/main/artifacts`
+
+The bootstrap scripts download the frontend, backend, MySQL and monitoring artifacts from this external location.
+
+Consequently, this repository alone is not sufficient to reproduce every application and monitoring artifact.
+
+Before deployment, verify that the external artifact repository is accessible and that its packaged files match the versions expected by the bootstrap scripts.
+
+For stronger reproducibility, use immutable artifact versions rather than relying on a moving `main` branch.
+
+## Prerequisites
+
+Install the following locally:
+
+- Git
+- Terraform 1.7 or later
+- AWS CLI
+- AWS credentials configured through a secure method
+- An AWS account with permission to provision EC2, IAM and Route 53 resources
+- A Route 53 hosted zone and domain you control
+- An accessible artifact repository
+
+Configure the AWS CLI:
+
+```bash
+aws configure
+aws sts get-caller-identity
+```
+
+The AWS identity must have the permissions required by the Terraform resources.
+
+## Deployment
+
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/dhanushgs7/Expense-App-Observability.git
+
 cd Expense-App-Observability
 ```
 
-### 3. Review configuration
+### 2. Configure Terraform variables
 
-Inspect Terraform variables, provider region, instance settings, security groups, user-data scripts, and monitoring configuration. Supply required values using a local `.tfvars` file or environment variables as expected by the project.
+Create a local `terraform.tfvars` file.
 
-Never commit AWS access keys, DuckDNS tokens, SSH private keys, SMTP passwords, Slack webhook URLs, secret-bearing `.tfvars` files, or Terraform state files.
+The following variables must be configured:
 
-### 4. Validate and plan Terraform
+```hcl
+ssh_cidr = "YOUR_PUBLIC_IP/32"
 
-From the Terraform root directory:
+browser_cidr = "YOUR_PUBLIC_IP/32"
+
+route53_zone_id = "YOUR_ROUTE53_HOSTED_ZONE_ID"
+
+domain_name = "YOUR_DOMAIN"
+
+db_root_password = "CHANGE_ME"
+db_app_password = "CHANGE_ME"
+db_exporter_password = "CHANGE_ME"
+
+alertmanager_smtp_host = "YOUR_SMTP_HOST:587"
+alertmanager_smtp_from = "YOUR_SENDER_EMAIL"
+alertmanager_smtp_auth_username = "YOUR_SMTP_USERNAME"
+alertmanager_smtp_auth_password = "YOUR_SMTP_APP_PASSWORD"
+
+alertmanager_email_to = "YOUR_ALERT_EMAIL"
+
+alertmanager_slack_webhook_url = "YOUR_SLACK_WEBHOOK"
+alertmanager_slack_channel = "#alerts"
+```
+
+Replace every placeholder with actual values.
+
+Never commit this file.
+
+### 3. Validate Terraform
+
+Run from the repository root:
 
 ```bash
-terraform fmt -check
+terraform fmt -check -recursive
+
 terraform init
+
 terraform validate
+```
+
+### 4. Review the deployment plan
+
+```bash
 terraform plan
 ```
 
-Review the plan carefully before applying it. Confirm that it will not unintentionally replace or destroy working resources.
+Review:
+- Number and type of EC2 instances.
+- Security group ingress rules.
+- IAM permissions.
+- Route 53 records.
+- EBS volumes.
+- Expected AWS costs.
 
 ### 5. Deploy infrastructure
 
-Only after reviewing the plan and confirming the account, region, costs, and resource changes:
+Only after reviewing the plan:
 
 ```bash
 terraform apply
 ```
 
-Follow the prompts and store outputs securely. Actual variable names, module layout, and deployment commands depend on the Terraform files in this repository.
-
-### 6. Configure DNS and HTTPS
-
-1. Point a hostname you control to the frontend's public IP.
-2. Confirm public DNS resolution before requesting a certificate.
-3. Allow inbound TCP `80` for HTTP validation and TCP `443` for HTTPS, according to your intended public access.
-4. Configure Nginx to serve the app and proxy API requests.
-5. Obtain and configure a certificate for that exact hostname.
-6. Test the Nginx configuration before reloading it:
+### 6. Inspect Terraform outputs
 
 ```bash
-sudo nginx -t
-sudo systemctl reload nginx
+terraform output
 ```
 
-The current demo uses DuckDNS and Certbot/Let's Encrypt. Certificate issuance and renewal depend on public DNS and successful validation. Never commit a private key.
+Use the outputs to identify the frontend, backend, database and monitoring infrastructure.
 
-### 7. Verify the deployment
+## Verification
 
-- Open the app and test adding and viewing an expense.
-- Verify API requests and database connectivity.
-- Check Prometheus targets and probe results.
-- Open Grafana and verify dashboard panels have data.
-- Check Alertmanager status and test Slack/email delivery.
-- Confirm HTTPS works without a browser certificate warning.
+### AWS infrastructure
 
-## Security Notes
-
-- Restrict SSH (`TCP 22`) to your own trusted IP or VPN rather than exposing it to `0.0.0.0/0`.
-- Expose only the ports that need public access. Do not expose MySQL (`3306`), internal backend ports, Prometheus (`9090`), Grafana (`3000`), or Alertmanager (`9093`) publicly unless that access is deliberately designed and secured.
-- Keep the database and backend on private network paths where possible.
-- Store credentials and notification tokens in a secrets manager or protected local configuration, not in Git.
-- Do not commit `terraform.tfstate`, `terraform.tfstate.backup`, private keys, `.env` files, or secret-bearing variable files.
-- Review Terraform plans before applying them, and remove lab resources when no longer needed to avoid unexpected AWS charges.
-- This is a learning project, not a production-hardened financial service. Do not enter sensitive financial information.
-
-## Screenshots
-
-Add screenshots to a repository folder such as `docs/images/` and update the paths below. Do not include credentials, tokens, email addresses, or other sensitive information.
-
-```md
-![Expense App](docs/images/expense-app.png)
-![Grafana Dashboard](docs/images/grafana-dashboard.png)
-![Prometheus Targets](docs/images/prometheus-targets.png)
-![Alert Notification](docs/images/alertmanager-notification.png)
+```bash
+aws ec2 describe-instances \
+  --filters "Name=tag:Project,Values=expense"
 ```
 
-## Troubleshooting
+Verify that the four expected instances are running.
 
-| Symptom | Checks |
-|---|---|
-| App does not load | Check EC2 status checks, security group rules, Nginx status, and port `80`/`443` reachability. |
-| Hostname does not resolve | Check the DuckDNS record, current public IP, and DNS resolution from a public resolver. |
-| HTTPS certificate error | Confirm the URL hostname matches the certificate and that the certificate is valid and renewed. |
-| API requests fail | Check Nginx `/api/` proxy configuration, backend service status, backend port access, and application logs. |
-| Prometheus target is down | Check target address, exporter service, network access, and Prometheus scrape configuration. |
-| Probe fails while target is UP | Check `probe_success`, probe error details, DNS, TLS, and endpoint reachability. |
-| Grafana panel has no data | Confirm the data source, time range, query, metric name, and label filters. |
-| Slack/email alert missing | Check alert state, Alertmanager routing, receiver configuration, and notification logs without exposing secrets. |
+### Linux services
 
-## What I Learned
+On the relevant instances:
 
-- Provisioning and managing AWS infrastructure with Terraform.
-- Deploying a multi-tier application across EC2 instances.
-- Using Nginx to serve a frontend and reverse-proxy API requests.
-- Configuring DNS and HTTPS for a public hostname.
-- Collecting infrastructure, application, and endpoint-probe metrics.
-- Building dashboards and configuring alert notifications.
-- Troubleshooting DNS, web-server, application, and monitoring issues.
+```bash
+sudo systemctl status nginx
 
-## Future Improvements
+sudo systemctl status backend
 
-- Add CI/CD for automated testing and deployment.
-- Store secrets in AWS Secrets Manager or Systems Manager Parameter Store.
-- Monitor certificate expiry and verify renewal automatically.
-- Add authentication and access controls for monitoring interfaces.
-- Add automated backups and documented recovery procedures.
-- Add reproducible tests and infrastructure cost controls.
+sudo systemctl status mysqld
+
+sudo systemctl status prometheus
+```
+
+Also verify Grafana, Alertmanager and exporter services on the monitoring instance.
+
+### Prometheus
+
+Open the Prometheus interface on port `9090`.
+
+Check:
+
+- `/targets`
+- `up`
+- `probe_success`
+
+Confirm that expected targets are healthy.
+
+### Grafana
+
+Open Grafana on port `3000`.
+
+Verify that the configured Prometheus data source is reachable and that populated dashboard panels return data.
+
+### Alertmanager
+
+Open Alertmanager on port `9093`.
+
+Verify configured receivers and test notification delivery using a controlled alert.
+
+### Application
+
+Verify:
+- Frontend accessibility.
+- Nginx API reverse proxy.
+- Backend health endpoint.
+- Database connectivity.
+- DNS resolution.
+- HTTPS behavior.
+
+**TLS note:** The current infrastructure configuration references a demo self-signed certificate. Do not describe this as a Let's Encrypt deployment. A self-signed certificate will not provide normal publicly trusted browser TLS.
+
+## Security Considerations
+
+- Restrict SSH access to a trusted IP or VPN.
+- Restrict monitoring interfaces to trusted networks.
+- Do not expose MySQL or internal backend ports publicly.
+- Never commit AWS credentials, private keys, Slack webhooks or SMTP passwords.
+- Keep `terraform.tfstate` outside Git.
+- Review Terraform plans before applying changes.
+- Use encrypted remote state and locking for shared environments.
+- Protect Terraform variables and instance bootstrap secrets.
+- Review EC2 public IP and EBS charges.
+- Do not use this demonstration application for real financial data.
+
+Terraform currently uses local state; the S3 and DynamoDB backend configuration in `versions.tf` is commented out.
+
+## Screenshots to Add
+
+Create a `docs/images/` directory and add genuine screenshots:
+
+```text
+docs/
+└── images/
+    ├── expense-application.png
+    ├── aws-ec2-instances.png
+    ├── prometheus-targets.png
+    ├── grafana-dashboard.png
+    └── slack-alert.png
+```
+
+Only add screenshots that correspond to successfully running components. Remove any screenshot entry if the feature has not been demonstrated.
+
+## Design Decisions and Lessons
+
+- Used Terraform to provision infrastructure consistently.
+- Separated frontend, backend, database and monitoring responsibilities.
+- Used private IP references for internal application communication.
+- Restricted tier-to-tier access through security groups.
+- Used EC2 service discovery instead of maintaining static Prometheus targets.
+- Used an IAM instance profile for Prometheus discovery instead of embedding AWS access keys.
+- Used exporters to expose host and database metrics.
+- Used Blackbox Exporter for endpoint availability checks.
+- Used Alertmanager for notification routing.
+
+## Known Limitations and Next Improvements
+
+1. Commit the actual Prometheus recording and alerting rule files.
+2. Populate the empty Grafana dashboard files or remove unused placeholders.
+3. Add reproducible Grafana provisioning configuration.
+4. Add the traffic-generation scripts if they are part of the intended demonstration.
+5. Replace the self-signed demo certificate with a publicly trusted TLS certificate.
+6. Move external artifact dependencies to versioned, immutable releases.
+7. Implement an encrypted remote Terraform state backend with locking.
+8. Add authentication and access control to monitoring interfaces.
+9. Add reproducible validation for the application and monitoring configuration.
 
 ## Author
 
-**Dhanush G S**  
-GitHub: [@dhanushgs7](https://github.com/dhanushgs7)
+**Dhanush G S**
 
----
+GitHub: [github.com/dhanushgs7](https://github.com/dhanushgs7)
 
-If you reuse or adapt this project, review the infrastructure configuration and security settings for your own environment before deploying.
+LinkedIn: [linkedin.com/in/dhanushgs7](https://www.linkedin.com/in/dhanushgs7)
+
